@@ -1,37 +1,72 @@
 #include "Camera.h"
-#include <iostream>
-#include <fstream>
 #include <chrono>
 #include <thread>
-#include <vector>
-#include <string>
 #include <algorithm>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <glm/gtc/matrix_inverse.hpp>
-#include <glm/gtc/type_ptr.hpp>
+#include <fstream>
+#include <cstdlib>
 
-void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    Camera* camera = (Camera*) glfwGetWindowUserPointer(window);
-    if (!camera) return;
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        switch(key) {
-            case GLFW_KEY_UP:    camera->handleUpArrow(); break;
-            case GLFW_KEY_DOWN:  camera->handleDownArrow(); break;
-            case GLFW_KEY_LEFT:  camera->handleLeftArrow(); break;
-            case GLFW_KEY_RIGHT: camera->handleRightArrow(); break;
-            case GLFW_KEY_R:     camera->handleRKey(); break;
-            case GLFW_KEY_L:     camera->handleLKey(); break;
-            case GLFW_KEY_U:     camera->handleUKey(); break;
-            case GLFW_KEY_D:     camera->handleDKey(); break;
-            case GLFW_KEY_B:     camera->handleBKey(); break;
-            case GLFW_KEY_F:     camera->handleFKey(); break;
-            case GLFW_KEY_SPACE: camera->handleSpaceKey(); break;
-            case GLFW_KEY_Z:     camera->handleZKey(); break;
-            case GLFW_KEY_A:     camera->handleAKey(); break;
-            case GLFW_KEY_P:     camera->handlePKey(); break;
+//--------------------------------------------------
+// Projection Setup
+//--------------------------------------------------
+void Camera::SetOrthographic(float nearPlane, float farPlane)
+{
+    m_Near = nearPlane;
+    m_Far = farPlane;
+    // Update the orthographic projection matrix
+    m_Projection = glm::ortho(m_Left, m_Right, m_Bottom, m_Top, nearPlane, farPlane);
+    m_View = glm::lookAt(m_Position, m_Position + m_Orientation, m_Up);
+}
+
+void Camera::SetPerspective(float fov, float nearPlane, float farPlane)
+{
+    m_FOV = fov;
+    m_PerspectiveNear = nearPlane;
+    m_PerspectiveFar = farPlane;
+    float aspectRatio = static_cast<float>(m_Width) / static_cast<float>(m_Height);
+    m_Projection = glm::perspective(glm::radians(m_FOV), aspectRatio, m_PerspectiveNear, m_PerspectiveFar);
+    UpdateViewMatrix();
+    std::cout << "Perspective set: FOV=" << m_FOV << ", Near=" << m_PerspectiveNear
+              << ", Far=" << m_PerspectiveFar << ", AspectRatio=" << aspectRatio << std::endl;
+}
+
+void Camera::SetPosition(glm::vec3 newPosition)
+{
+    m_Position = newPosition;
+    UpdateViewMatrix();
+}
+
+//--------------------------------------------------
+// Input Callback Functions (using improved signatures)
+//--------------------------------------------------
+
+// Key input callback (no changes to signature)
+void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+    auto* cam = static_cast<Camera*>(glfwGetWindowUserPointer(window));
+    if (!cam) {
+        std::cout << "Warning: Camera not set as Window User Pointer! Skipping KeyCallback." << std::endl;
+        return;
+    }
+    if (action == GLFW_PRESS || action == GLFW_REPEAT)
+    {
+        switch (key)
+        {
+            case GLFW_KEY_UP:    cam->handleUpArrow(); break;
+            case GLFW_KEY_DOWN:  cam->handleDownArrow(); break;
+            case GLFW_KEY_LEFT:  cam->handleLeftArrow(); break;
+            case GLFW_KEY_RIGHT: cam->handleRightArrow(); break;
+            case GLFW_KEY_R:     cam->handleRKey(); break;
+            case GLFW_KEY_L:     cam->handleLKey(); break;
+            case GLFW_KEY_U:     cam->handleUKey(); break;
+            case GLFW_KEY_D:     cam->handleDKey(); break;
+            case GLFW_KEY_B:     cam->handleBKey(); break;
+            case GLFW_KEY_F:     cam->handleFKey(); break;
+            case GLFW_KEY_SPACE: cam->handleSpaceKey(); break;
+            case GLFW_KEY_Z:     cam->handleZKey(); break;
+            case GLFW_KEY_A:     cam->handleAKey(); break;
+            case GLFW_KEY_P:     cam->handlePKey(); break;
             case GLFW_KEY_M:
-                std::thread([camera]() { camera->handleMKey(); }).detach();
+                std::thread([cam]() { cam->handleMKey(); }).detach();
                 break;
             default:
                 break;
@@ -39,80 +74,149 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     }
 }
 
-void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
-        std::cout << "MOUSE LEFT Click" << std::endl;
-    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
-        std::cout << "MOUSE RIGHT Click" << std::endl;
+// Corrected mouse button callback signature
+void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
+{
+    auto* cam = static_cast<Camera*>(glfwGetWindowUserPointer(window));
+    if (!cam) {
+        std::cout << "Warning: Camera not set as Window User Pointer! Skipping MouseButtonCallback." << std::endl;
+        return;
+    }
+
+    // Report left-button clicks
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+    {
+        std::cout << "Mouse LEFT button pressed." << std::endl;
+    }
+
+    // Right mouse button for picking
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS)
+    {
+        std::cout << "Mouse RIGHT button pressed." << std::endl;
+        if (cam->rubiksCube.pickingMode)
+        {
+            double mouseX, mouseY;
+            glfwGetCursorPos(window, &mouseX, &mouseY);
+            int flippedY = cam->m_Height - static_cast<int>(mouseY);
+
+            unsigned char pickedColor[4] = {0, 0, 0, 0};
+            glReadPixels(static_cast<int>(mouseX), flippedY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pickedColor);
+
+            int colorID = static_cast<int>(pickedColor[0]);
+            int shapeID = colorID; // decoding strategy
+
+            if (shapeID < 0 || shapeID > 26)
+            {
+                cam->rubiksCube.selectedCube = nullptr;
+            }
+            else
+            {
+                for (SmallCube* cube : cam->rubiksCube.smallCubes)
+                {
+                    if (cube->index == shapeID)
+                    {
+                        cam->rubiksCube.selectedCube = cube;
+                        std::cout << "Selected cube index: " << cube->index << std::endl;
+                        break;
+                    }
+                }
+            }
+            std::cout << "Picked Color: [R: " << static_cast<int>(pickedColor[0])
+                      << ", G: " << static_cast<int>(pickedColor[1])
+                      << ", B: " << static_cast<int>(pickedColor[2]) << "]" << std::endl;
+            std::cout << "Decoded Shape ID: " << shapeID << std::endl;
+        }
+    }
 }
 
-void CursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
-    Camera* camera = (Camera*) glfwGetWindowUserPointer(window);
-    if (!camera) return;
-    float deltaX = camera->m_OldMouseX - xpos;
-    float deltaY = camera->m_OldMouseY - ypos;
-    camera->m_OldMouseX = xpos;
-    camera->m_OldMouseY = ypos;
-    
-    // If left mouse button is pressed: rotate (as before)
-    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-        if (camera->rubiksCube.pickingMode && camera->rubiksCube.selectedCube) {
-            float angleY = deltaX * camera->m_RotationSensitivity;
-            float angleX = deltaY * camera->m_RotationSensitivity;
-            glm::mat4 transToOrigin = glm::translate(glm::mat4(1.0f), -camera->rubiksCube.selectedCube->getPosition());
-            glm::mat4 rotX = glm::rotate(glm::mat4(1.0f), glm::radians(angleX), glm::vec3(1,0,0));
-            glm::mat4 rotY = glm::rotate(glm::mat4(1.0f), glm::radians(angleY), glm::vec3(0,1,0));
-            glm::mat4 transBack = glm::translate(glm::mat4(1.0f), camera->rubiksCube.selectedCube->getPosition());
-            glm::mat4 final = transBack * rotY * rotX * transToOrigin;
-            camera->rubiksCube.selectedCube->setModelMatrix(final * camera->rubiksCube.selectedCube->getModelMatrix());
-        } else {
-            float angleY = deltaX * camera->m_RotationSensitivity;
-            float angleX = deltaY * camera->m_RotationSensitivity;
-            for (auto cube : camera->rubiksCube.getSmallCubes()) {
-                cube->setRotationMatrix(
-                    glm::rotate(glm::mat4(1.0f), glm::radians(angleY), glm::vec3(0,1,0)) *
-                    glm::rotate(glm::mat4(1.0f), glm::radians(angleX), glm::vec3(1,0,0)) *
-                    cube->getRotationMatrix()
-                );
+// Cursor position callback handles both cube rotation and camera movement.
+void CursorPosCallback(GLFWwindow* window, double currX, double currY)
+{
+    auto* cam = static_cast<Camera*>(glfwGetWindowUserPointer(window));
+    if (!cam) {
+        std::cout << "Warning: Camera not set as Window User Pointer! Skipping CursorPosCallback." << std::endl;
+        return;
+    }
+
+    float deltaX = static_cast<float>(cam->m_OldMouseX - currX);
+    float deltaY = static_cast<float>(cam->m_OldMouseY - currY);
+    cam->m_OldMouseX = currX;
+    cam->m_OldMouseY = currY;
+
+    // Left button: rotate either a selected cube or all cubes.
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
+    {
+        if (cam->rubiksCube.pickingMode)
+        {
+            SmallCube* cube = cam->rubiksCube.selectedCube;
+            if (cube)
+            {
+                float rotAngleY = deltaX * cam->m_RotationSensitivity;
+                float rotAngleX = deltaY * cam->m_RotationSensitivity;
+                glm::mat4 translateToOrigin = glm::translate(glm::mat4(1.0f), -cube->getPosition());
+                glm::mat4 rotX = glm::rotate(glm::mat4(1.0f), glm::radians(rotAngleX), glm::vec3(1.0f, 0.0f, 0.0f));
+                glm::mat4 rotY = glm::rotate(glm::mat4(1.0f), glm::radians(rotAngleY), glm::vec3(0.0f, 1.0f, 0.0f));
+                glm::mat4 translateBack = glm::translate(glm::mat4(1.0f), cube->getPosition());
+                glm::mat4 finalTransform = translateBack * rotY * rotX * translateToOrigin;
+                cube->setModelMatrix(finalTransform * cube->getModelMatrix());
+            }
+        }
+        else
+        {
+            float rotAngleY = deltaX * cam->m_RotationSensitivity;
+            float rotAngleX = glm::clamp(deltaY * cam->m_RotationSensitivity, -89.0f, 89.0f);
+            glm::mat4 rotX = glm::rotate(glm::mat4(1.0f), glm::radians(rotAngleX), glm::vec3(1.0f, 0.0f, 0.0f));
+            glm::mat4 rotY = glm::rotate(glm::mat4(1.0f), glm::radians(rotAngleY), glm::vec3(0.0f, 1.0f, 0.0f));
+            glm::mat4 combinedRotation = rotY * rotX;
+            for (SmallCube* cube : cam->rubiksCube.getSmallCubes())
+            {
+                cube->setRotationMatrix(combinedRotation * cube->getRotationMatrix());
             }
         }
     }
-    // If right mouse button is pressed: either move the camera (if no cube is selected)
-    // or translate the picked cube so that it stays under the mouse.
-    else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
-        if (camera->rubiksCube.pickingMode && camera->rubiksCube.selectedCube) {
-            // Get the viewport
-            int viewport[4];
-            glGetIntegerv(GL_VIEWPORT, viewport);
-            // Read depth at the current mouse coordinates.
-            float winZ;
-            glReadPixels((int)xpos, viewport[3] - (int)ypos, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &winZ);
-            // Create a viewport vector
-            glm::vec4 vp(0, 0, viewport[2], viewport[3]);
-            // Unproject the window coordinates (x, y, winZ) into world coordinates.
-            glm::vec3 winCoord(xpos, viewport[3] - ypos, winZ);
-            glm::vec3 worldPos = glm::unProject(winCoord, camera->GetViewMatrix(), camera->GetProjectionMatrix(), vp);
-            // Update the selected cube's model matrix to translate it to worldPos.
-            // (You may wish to preserve the rotation; here we simply replace the translation.)
-            glm::mat4 newModel = glm::translate(glm::mat4(1.0f), worldPos);
-            camera->rubiksCube.selectedCube->setModelMatrix(newModel);
-        } else {
-            float sensitivity = 0.01f;
-            camera->m_Position += glm::vec3(-deltaX * sensitivity, deltaY * sensitivity, 0);
-            camera->UpdateViewMatrix();
+        // Right button: translate either the selected cube or the camera.
+    else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
+    {
+        if (cam->rubiksCube.pickingMode)
+        {
+            SmallCube* cube = cam->rubiksCube.selectedCube;
+            if (cube)
+            {
+                float sensitivity = 0.02f * cam->m_Position.z / 15.0f;
+                glm::vec3 translation(deltaX * sensitivity, -deltaY * sensitivity, 0.0f);
+                glm::mat4 transMat = glm::translate(glm::mat4(1.0f), translation);
+                cube->setModelMatrix(transMat * cube->getModelMatrix());
+            }
+        }
+        else
+        {
+            float sensitivity = 0.005f;
+            cam->m_Position += glm::normalize(glm::cross(cam->m_Orientation, cam->m_Up)) * deltaX * sensitivity;
+            cam->m_Position += cam->m_Up * deltaY * sensitivity;
+            cam->UpdateViewMatrix();
         }
     }
 }
 
-void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
-    Camera* camera = (Camera*) glfwGetWindowUserPointer(window);
-    if (!camera) return;
+// Scroll callback: zoom the camera along its orientation.
+void ScrollCallback(GLFWwindow* window, double offsetX, double offsetY)
+{
+    auto* cam = static_cast<Camera*>(glfwGetWindowUserPointer(window));
+    if (!cam) {
+        std::cout << "Warning: Camera not set as Window User Pointer! Skipping ScrollCallback." << std::endl;
+        return;
+    }
     float sensitivity = 0.5f;
-    camera->m_Position += camera->m_Orientation * (float)yoffset * sensitivity;
-    camera->UpdateViewMatrix();
+    cam->m_Position += cam->m_Orientation * static_cast<float>(offsetY) * sensitivity;
+    cam->UpdateViewMatrix();
+    std::cout << "Scroll motion processed." << std::endl;
 }
 
-void Camera::EnableInputs(GLFWwindow* window) {
+//--------------------------------------------------
+// Camera Input Enabling
+//--------------------------------------------------
+void Camera::EnableInputs(GLFWwindow* window)
+{
     glfwSetWindowUserPointer(window, this);
     glfwSetKeyCallback(window, KeyCallback);
     glfwSetMouseButtonCallback(window, MouseButtonCallback);
@@ -120,79 +224,116 @@ void Camera::EnableInputs(GLFWwindow* window) {
     glfwSetScrollCallback(window, ScrollCallback);
 }
 
-// --- Key handling methods ---
-void Camera::handleRKey() {
-    std::cout << "R key pressed" << std::endl;
+//--------------------------------------------------
+// View Matrix Update
+//--------------------------------------------------
+void Camera::UpdateViewMatrix()
+{
+    // Compute the right vector correctly using the camera's orientation and up vector.
+    glm::vec3 right = glm::normalize(glm::cross(m_Orientation, m_Up));
+    glm::vec3 recalculatedUp = glm::normalize(glm::cross(right, m_Orientation));
+
+    // Apply pitch and yaw rotations to the orientation.
+    m_Orientation = glm::rotate(m_Orientation, glm::radians(m_RotationAngleX), right);
+    m_Orientation = glm::rotate(m_Orientation, glm::radians(m_RotationAngleY), m_Up);
+
+    m_View = glm::lookAt(m_Position, m_Position + m_Orientation, recalculatedUp);
+}
+
+//--------------------------------------------------
+// Rubik's Cube Interaction Key Handlers
+//--------------------------------------------------
+void Camera::handleRKey()
+{
+    std::cout << "R key pressed." << std::endl;
     if (rubiksCube.canRotateRightWall())
         rubiksCube.rotateRightWall();
 }
-void Camera::handleLKey() {
-    std::cout << "L key pressed" << std::endl;
+
+void Camera::handleLKey()
+{
+    std::cout << "L key pressed." << std::endl;
     if (rubiksCube.canRotateLeftWall())
         rubiksCube.rotateLeftWall();
 }
-void Camera::handleUKey() {
-    std::cout << "U key pressed" << std::endl;
+
+void Camera::handleUKey()
+{
+    std::cout << "U key pressed." << std::endl;
     if (rubiksCube.canRotateUpWall())
         rubiksCube.rotateUpWall();
 }
-void Camera::handleDKey() {
-    std::cout << "D key pressed" << std::endl;
+
+void Camera::handleDKey()
+{
+    std::cout << "D key pressed." << std::endl;
     if (rubiksCube.canRotateDownWall())
         rubiksCube.rotateDownWall();
 }
-void Camera::handleBKey() {
-    std::cout << "B key pressed" << std::endl;
+
+void Camera::handleBKey()
+{
+    std::cout << "B key pressed." << std::endl;
     if (rubiksCube.canRotateBackWall())
         rubiksCube.rotateBackWall();
 }
-void Camera::handleFKey() {
-    std::cout << "F key pressed" << std::endl;
+
+void Camera::handleFKey()
+{
+    std::cout << "F key pressed." << std::endl;
     if (rubiksCube.canRotateFrontWall())
         rubiksCube.rotateFrontWall();
 }
-void Camera::handleSpaceKey() {
-    std::cout << "Space key pressed - Flip Rotation Direction" << std::endl;
+
+void Camera::handleSpaceKey()
+{
+    std::cout << "Space key pressed - flipping rotation direction." << std::endl;
     rubiksCube.RotationDirection = -rubiksCube.RotationDirection;
 }
-void Camera::handleZKey() {
-    std::cout << "Z key pressed - Divide Rotation Angle by 2" << std::endl;
-    rubiksCube.RotationAngle = std::max(rubiksCube.RotationAngle / 2, 45);
-    std::cout << "New angle: " << rubiksCube.RotationDirection * rubiksCube.RotationAngle << std::endl;
+
+void Camera::handleZKey()
+{
+    std::cout << "Z key pressed - halving rotation angle." << std::endl;
+    // Ensure the value is kept as a float.
+    rubiksCube.RotationAngle = std::max(rubiksCube.RotationAngle / 2.0f, 45.0f);
+    std::cout << "New rotation angle: " << rubiksCube.RotationAngle * rubiksCube.RotationDirection << std::endl;
 }
-void Camera::handleAKey() {
-    std::cout << "A key pressed - Multiply Rotation Angle by 2" << std::endl;
-    rubiksCube.RotationAngle = std::min(rubiksCube.RotationAngle * 2, 180);
-    std::cout << "New angle: " << rubiksCube.RotationDirection * rubiksCube.RotationAngle << std::endl;
+
+void Camera::handleAKey()
+{
+    std::cout << "A key pressed - doubling rotation angle." << std::endl;
+    rubiksCube.RotationAngle = std::min(rubiksCube.RotationAngle * 2.0f, 180.0f);
+    std::cout << "New rotation angle: " << rubiksCube.RotationAngle * rubiksCube.RotationDirection << std::endl;
 }
-void Camera::handlePKey() {
-    std::cout << "P key pressed - Toggle Picking Mode" << std::endl;
-    rubiksCube.pickingMode = !rubiksCube.pickingMode;
-    // When turning off picking mode, also clear any selected cube.
-    if (!rubiksCube.pickingMode)
-        rubiksCube.selectedCube = nullptr;
-    std::cout << "Picking mode is now " << rubiksCube.pickingMode << std::endl;
-}
+
+//--------------------------------------------------
+// Mixer (Bonus) - Randomized Rubik's Cube Moves
+//--------------------------------------------------
 void Camera::handleMKey() {
-    std::cout << "M key pressed - Starting Mixer" << std::endl;
+    std::cout << "M key pressed - the Mixer will start the work..." << std::endl;
     std::ofstream mixerFile("mixer.txt");
     if (!mixerFile.is_open()) {
-        std::cerr << "Error: Unable to open mixer.txt" << std::endl;
+        std::cerr << "Error: Unable to open mixer.txt for writing." << std::endl;
         return;
     }
-    // Define valid actions. (Only perform moves if the corresponding canRotate function returns true.)
+    std::cout << "File mixer.txt opened successfully." << std::endl;
+
+    // Use the instance 'rubiksCube' to access non-static members.
     std::vector<std::pair<char, std::string>> actions = {
-        {'R', "Right wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + "°)"},
-        {'L', "Left wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + "°)"},
-        {'U', "Up wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + "°)"},
-        {'D', "Down wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + "°)"},
-        {'B', "Back wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + "°)"},
-        {'F', "Front wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + "°)"}
+            {'R', "Right wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + " deg)"},
+            {'L', "Left wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + " deg)"},
+            {'U', "Up wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + " deg)"},
+            {'D', "Down wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + " deg)"},
+            {'B', "Back wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + " deg)"},
+            {'F', "Front wall rotation (" + std::to_string(rubiksCube.RotationDirection * rubiksCube.RotationAngle) + " deg)"}
     };
+
     int actionCount = 50 + (std::rand() % 50);
-    for (int i = 0; i < actionCount; i++) {
-        auto action = actions[std::rand() % actions.size()];
-        switch(action.first) {
+    std::cout << "Number of actions to perform: " << actionCount << std::endl;
+
+    for (int i = 0; i < actionCount; ++i) {
+        const auto& action = actions[std::rand() % actions.size()];
+        switch (action.first) {
             case 'R': handleRKey(); break;
             case 'L': handleLKey(); break;
             case 'U': handleUKey(); break;
@@ -204,21 +345,39 @@ void Camera::handleMKey() {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     mixerFile.close();
-    std::cout << "Mixer actions written to mixer.txt" << std::endl;
+    std::cout << "Mixer actions have been written to mixer.txt." << std::endl;
 }
-void Camera::handleUpArrow() {
-    std::cout << "Up Arrow pressed" << std::endl;
+
+void Camera::handlePKey()
+{
+    std::cout << "P key pressed - toggling picking mode." << std::endl;
+    rubiksCube.pickingMode = !rubiksCube.pickingMode;
+    std::cout << "Picking mode is now: " << rubiksCube.pickingMode << std::endl;
+}
+
+//--------------------------------------------------
+// Arrow Key Handlers for Rubik's Cube Movement
+//--------------------------------------------------
+void Camera::handleUpArrow()
+{
+    std::cout << "UP Arrow pressed." << std::endl;
     rubiksCube.UpArrow();
 }
-void Camera::handleDownArrow() {
-    std::cout << "Down Arrow pressed" << std::endl;
+
+void Camera::handleDownArrow()
+{
+    std::cout << "Down Arrow pressed." << std::endl;
     rubiksCube.DownArrow();
 }
-void Camera::handleLeftArrow() {
-    std::cout << "Left Arrow pressed" << std::endl;
+
+void Camera::handleLeftArrow()
+{
+    std::cout << "Left Arrow pressed." << std::endl;
     rubiksCube.LeftArrow();
 }
-void Camera::handleRightArrow() {
-    std::cout << "Right Arrow pressed" << std::endl;
+
+void Camera::handleRightArrow()
+{
+    std::cout << "Right Arrow pressed." << std::endl;
     rubiksCube.RightArrow();
 }

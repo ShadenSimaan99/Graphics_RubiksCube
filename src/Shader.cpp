@@ -1,7 +1,7 @@
 #include <Shader.h>
 
 Shader::Shader(const std::string& filepath)
-    : m_Filepath(filepath), m_RendererID(0)
+        : m_Filepath(filepath), m_RendererID(0)
 {
     ShaderProgramSource source = ParseShader(filepath);
     m_RendererID = CreateShader(source.VertexSource, source.FragmentSource);
@@ -37,7 +37,7 @@ ShaderProgramSource Shader::ParseShader(const std::string& filepath)
                 type = ShaderType::FRAGMENT;
             }
         }
-        else 
+        else
         {
             ss[(int)type] << line << '\n';
         }
@@ -129,7 +129,11 @@ int Shader::GetUniformLocation(const std::string& name)
     {
         std::cout << "Warning: uniform '" << name << "' doesn't exist!" << std::endl;
     }
-    
+
     m_UniformLocationCache[name] = location;
     return location;
+}
+
+void Shader::SetPickingMode(bool pickingMode) {
+    SetUniform1i("u_PickingMode", pickingMode ? 1 : 0);
 }
